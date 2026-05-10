@@ -1,0 +1,5 @@
+-r base.txt
+
+# Optional, helpful in development
+black>=24.0,<25.0
+isort>=5.13,<6.0

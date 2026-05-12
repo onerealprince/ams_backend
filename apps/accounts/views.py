@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -9,12 +9,32 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.institutions.models import Institution
 
-from .serializers import RegisterSerializer, ResendOtpSerializer, VerifyOtpSerializer
-from .services import issue_email_otp, verify_email_otp
+from .models import UserRole
+from .serializers import (
+    LoginStartSerializer,
+    LoginVerifySerializer,
+    RegisterSerializer,
+    ResendOtpSerializer,
+    VerifyOtpSerializer,
+)
+from .services import issue_email_otp, issue_login_otp, verify_email_otp, verify_login_otp
+
+
+def _dashboard_path_for_role(role: str) -> str:
+    return {
+        UserRole.ADMIN: '/dashboard/system-administrator',
+        UserRole.INSTITUTION_CONTACT: '/dashboard/ipc',
+        UserRole.BOARD_MEMBER: '/dashboard/board-member',
+        UserRole.OFFICER: '/dashboard/compliance',
+        UserRole.INSPECTOR: '/dashboard/inspector',
+        UserRole.DG: '/dashboard/dg',
+        UserRole.CASE_MANAGER: '/dashboard/case-manager',
+        UserRole.APPEALS_TRIBUNAL: '/dashboard/appeals-tribunal',
+    }.get(role, '/dashboard')
 
 
 @api_view(['GET'])
@@ -72,13 +92,21 @@ def verify_otp(request):
 
     User = get_user_model()
     try:
-        user = User.objects.get(email=data['email'])
+        user = User.objects.get(email__iexact=data['email'].strip())
     except User.DoesNotExist:
         return Response({'detail': 'Provide a valid email'}, status=status.HTTP_400_BAD_REQUEST)
 
     ok = verify_email_otp(user, data['otp'])
     if not ok:
-        return Response({'detail': 'Invalid or expired OTP'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                'detail': (
+                    'Invalid or expired registration OTP. '
+                    'For login MFA after password, use POST /api/v1/auth/login/verify/ instead.'
+                ),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     return Response({'detail': 'Email verified.'})
 
@@ -92,7 +120,7 @@ def resend_otp(request):
 
     User = get_user_model()
     try:
-        user = User.objects.get(email=data['email'])
+        user = User.objects.get(email__iexact=data['email'].strip())
     except User.DoesNotExist:
         return Response({'detail': 'Provide a valid email'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -104,35 +132,104 @@ def resend_otp(request):
     return Response({'detail': 'OTP resent.'})
 
 
-class CustomTokenObtainPairView(TokenObtainPairView):
-    def post(self, request, *args, **kwargs):
-        User = get_user_model()
-        email = request.data.get('email')
-        if email:
-            user = User.objects.filter(email=email).first()
-            if user and user.locked_until and user.locked_until > timezone.now():
-                return Response({'detail': 'Too many failed attempts'}, status=status.HTTP_403_FORBIDDEN)
-            if user and not user.is_email_verified:
-                return Response({'detail': "Account doesn’t exist"}, status=status.HTTP_403_FORBIDDEN)
+def _login_precheck_user(user):
+    """Shared gate before password or OTP MFA for existing accounts."""
+    if user.locked_until and user.locked_until > timezone.now():
+        return Response({'detail': 'Too many failed attempts'}, status=status.HTTP_403_FORBIDDEN)
+    if not user.is_email_verified:
+        return Response(
+            {
+                'detail': (
+                    'This email is not verified yet. '
+                    'If you self-registered, complete OTP verification first, '
+                    'or ask an admin to verify the account.'
+                ),
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
 
-        response = super().post(request, *args, **kwargs)
 
-        if response.status_code != 200 and email:
-            user = User.objects.filter(email=email).first()
-            if user:
-                user.failed_login_attempts = min(user.failed_login_attempts + 1, 100)
-                if user.failed_login_attempts >= 5:
-                    user.locked_until = timezone.now() + timedelta(minutes=15)
-                    user.failed_login_attempts = 0
-                    user.save(update_fields=['locked_until', 'failed_login_attempts'])
-                else:
-                    user.save(update_fields=['failed_login_attempts'])
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_start(request):
+    """Phase 1: validate email + password, then send login OTP (MFA) to email."""
+    serializer = LoginStartSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    email_raw = serializer.validated_data['email'].strip()
+    password = serializer.validated_data['password']
 
-        if response.status_code == 200 and email:
-            user = User.objects.filter(email=email).first()
-            if user:
-                user.failed_login_attempts = 0
-                user.locked_until = None
-                user.save(update_fields=['failed_login_attempts', 'locked_until'])
+    User = get_user_model()
+    user = User.objects.filter(email__iexact=email_raw).first()
+    if not user:
+        return Response({'detail': 'Invalid email or password'}, status=status.HTTP_400_BAD_REQUEST)
 
-        return response
+    blocked = _login_precheck_user(user)
+    if blocked is not None:
+        return blocked
+
+    auth_user = authenticate(request, username=user.email, password=password)
+    if auth_user is None:
+        user.failed_login_attempts = min(user.failed_login_attempts + 1, 100)
+        if user.failed_login_attempts >= 5:
+            user.locked_until = timezone.now() + timedelta(minutes=15)
+            user.failed_login_attempts = 0
+            user.save(update_fields=['locked_until', 'failed_login_attempts'])
+        else:
+            user.save(update_fields=['failed_login_attempts'])
+        if user.check_password(password) and not user.is_active:
+            return Response({'detail': 'This account is disabled.'}, status=status.HTTP_403_FORBIDDEN)
+        return Response({'detail': 'Invalid email or password'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.save(update_fields=['failed_login_attempts', 'locked_until'])
+
+    try:
+        issue_login_otp(user)
+    except ValueError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({'detail': 'OTP sent to email.'}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_verify(request):
+    """Phase 1: verify login OTP and return JWTs plus role (session substitute)."""
+    serializer = LoginVerifySerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    email_raw = serializer.validated_data['email'].strip()
+    otp = serializer.validated_data['otp']
+
+    User = get_user_model()
+    try:
+        user = User.objects.get(email__iexact=email_raw)
+    except User.DoesNotExist:
+        return Response({'detail': 'Provide a valid email'}, status=status.HTTP_400_BAD_REQUEST)
+
+    blocked = _login_precheck_user(user)
+    if blocked is not None:
+        return blocked
+
+    if not verify_login_otp(user, otp):
+        return Response(
+            {
+                'detail': (
+                    'Invalid or expired login code. '
+                    'Use the code from the "AMS Login OTP" email and POST to /api/v1/auth/login/verify/.'
+                ),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    refresh = RefreshToken.for_user(user)
+    return Response(
+        {
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+            'role': user.role,
+            'dashboard_path': _dashboard_path_for_role(user.role),
+        },
+        status=status.HTTP_200_OK,
+    )

@@ -35,6 +35,8 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('role', UserRole.ADMIN)
+        # Phase 1: SA / root accounts are created by developers; no registration OTP flow.
+        extra_fields.setdefault('is_email_verified', True)
 
         if extra_fields.get('is_staff') is not True:
             raise ValueError('Superuser must have is_staff=True.')
@@ -56,6 +58,9 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_email_verified = models.BooleanField(default=False)
     email_otp_hash = models.CharField(max_length=128, blank=True)
     email_otp_created_at = models.DateTimeField(null=True, blank=True)
+    # Login MFA OTP (after password); stored in DB so dev server reload does not drop it (unlike LocMem cache).
+    login_otp_hash = models.CharField(max_length=128, blank=True)
+    login_otp_created_at = models.DateTimeField(null=True, blank=True)
     otp_resend_count = models.PositiveSmallIntegerField(default=0)
     otp_resend_window_started_at = models.DateTimeField(null=True, blank=True)
     otp_last_sent_at = models.DateTimeField(null=True, blank=True)

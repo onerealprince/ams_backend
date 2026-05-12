@@ -22,3 +22,13 @@ class VerifyOtpSerializer(serializers.Serializer):
 
 class ResendOtpSerializer(serializers.Serializer):
     email = serializers.EmailField()
+
+
+class LoginStartSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+
+
+class LoginVerifySerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    otp = serializers.CharField(max_length=10)

@@ -9,6 +9,9 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("institutions", "0001_initial"),
+        ("applications", "0002_remove_accreditationapplication_status_and_more"),
+        ("licenses", "0001_initial"),
+        ("accounts", "0001_initial"),
     ]
 
     operations = [
@@ -51,12 +54,56 @@ class Migration(migrations.Migration):
                 max_length=20,
             ),
         ),
-        migrations.AlterField(
-            model_name="institution",
-            name="id",
-            field=models.UUIDField(
-                default=uuid.uuid4, editable=False, primary_key=True, serialize=False
-            ),
+        # BigAutoField -> UUIDField: PostgreSQL cannot cast bigint to uuid. Map new UUIDs
+        # on Institution, rewrite referencing FK columns, then swap the PK column.
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql=[
+                        "ALTER TABLE institutions_institution ADD COLUMN __uuid_pk uuid NOT NULL DEFAULT gen_random_uuid();",
+                        "ALTER TABLE institutions_institution ALTER COLUMN __uuid_pk DROP DEFAULT;",
+                        "ALTER TABLE applications_accreditationapplication ADD COLUMN institution_id_uuid uuid NULL;",
+                        "UPDATE applications_accreditationapplication a SET institution_id_uuid = i.__uuid_pk FROM institutions_institution i WHERE a.institution_id = i.id;",
+                        "ALTER TABLE licenses_license ADD COLUMN institution_id_uuid uuid NULL;",
+                        "UPDATE licenses_license l SET institution_id_uuid = i.__uuid_pk FROM institutions_institution i WHERE l.institution_id = i.id;",
+                        "ALTER TABLE accounts_user ADD COLUMN institution_id_uuid uuid NULL;",
+                        "UPDATE accounts_user u SET institution_id_uuid = i.__uuid_pk FROM institutions_institution i WHERE u.institution_id = i.id;",
+                        "ALTER TABLE applications_accreditationapplication DROP CONSTRAINT IF EXISTS applications_accreditationapplication_institution_id_fkey;",
+                        "ALTER TABLE licenses_license DROP CONSTRAINT IF EXISTS licenses_license_institution_id_fkey;",
+                        "ALTER TABLE licenses_license DROP CONSTRAINT IF EXISTS licenses_license_institution_id_key;",
+                        "ALTER TABLE accounts_user DROP CONSTRAINT IF EXISTS accounts_user_institution_id_fkey;",
+                        "ALTER TABLE applications_accreditationapplication DROP COLUMN institution_id;",
+                        "ALTER TABLE applications_accreditationapplication RENAME COLUMN institution_id_uuid TO institution_id;",
+                        "ALTER TABLE applications_accreditationapplication ALTER COLUMN institution_id SET NOT NULL;",
+                        "ALTER TABLE licenses_license DROP COLUMN institution_id;",
+                        "ALTER TABLE licenses_license RENAME COLUMN institution_id_uuid TO institution_id;",
+                        "ALTER TABLE licenses_license ALTER COLUMN institution_id SET NOT NULL;",
+                        "ALTER TABLE accounts_user DROP COLUMN institution_id;",
+                        "ALTER TABLE accounts_user RENAME COLUMN institution_id_uuid TO institution_id;",
+                        "ALTER TABLE institutions_institution DROP CONSTRAINT IF EXISTS institutions_institution_pkey;",
+                        "ALTER TABLE institutions_institution DROP COLUMN id;",
+                        "ALTER TABLE institutions_institution RENAME COLUMN __uuid_pk TO id;",
+                        "ALTER TABLE institutions_institution ADD CONSTRAINT institutions_institution_pkey PRIMARY KEY (id);",
+                        "ALTER TABLE applications_accreditationapplication ADD CONSTRAINT applications_accreditationapplication_institution_id_fkey FOREIGN KEY (institution_id) REFERENCES institutions_institution(id) DEFERRABLE INITIALLY DEFERRED;",
+                        "ALTER TABLE licenses_license ADD CONSTRAINT licenses_license_institution_id_fkey FOREIGN KEY (institution_id) REFERENCES institutions_institution(id) DEFERRABLE INITIALLY DEFERRED;",
+                        "ALTER TABLE licenses_license ADD CONSTRAINT licenses_license_institution_id_key UNIQUE (institution_id);",
+                        "ALTER TABLE accounts_user ADD CONSTRAINT accounts_user_institution_id_fkey FOREIGN KEY (institution_id) REFERENCES institutions_institution(id) DEFERRABLE INITIALLY DEFERRED;",
+                    ],
+                    reverse_sql=migrations.RunSQL.noop,
+                ),
+            ],
+            state_operations=[
+                migrations.AlterField(
+                    model_name="institution",
+                    name="id",
+                    field=models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+            ],
         ),
         migrations.AlterField(
             model_name="institution",

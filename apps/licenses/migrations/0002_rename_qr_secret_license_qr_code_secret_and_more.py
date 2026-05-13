@@ -21,12 +21,31 @@ class Migration(migrations.Migration):
             name="board_resolution_reference",
             field=models.CharField(blank=True, max_length=100),
         ),
-        migrations.AlterField(
-            model_name="license",
-            name="id",
-            field=models.UUIDField(
-                default=uuid.uuid4, editable=False, primary_key=True, serialize=False
-            ),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql=[
+                        "ALTER TABLE licenses_license DROP CONSTRAINT IF EXISTS licenses_license_pkey;",
+                        "ALTER TABLE licenses_license DROP COLUMN id;",
+                        "ALTER TABLE licenses_license ADD COLUMN id uuid NOT NULL DEFAULT gen_random_uuid();",
+                        "ALTER TABLE licenses_license ADD CONSTRAINT licenses_license_pkey PRIMARY KEY (id);",
+                        "ALTER TABLE licenses_license ALTER COLUMN id DROP DEFAULT;",
+                    ],
+                    reverse_sql=migrations.RunSQL.noop,
+                ),
+            ],
+            state_operations=[
+                migrations.AlterField(
+                    model_name="license",
+                    name="id",
+                    field=models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+            ],
         ),
         migrations.AlterField(
             model_name="license",

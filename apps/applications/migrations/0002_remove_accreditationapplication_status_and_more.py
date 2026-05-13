@@ -44,12 +44,38 @@ class Migration(migrations.Migration):
             name="last_modified_date",
             field=models.DateTimeField(auto_now=True),
         ),
-        migrations.AlterField(
-            model_name="accreditationapplication",
-            name="id",
-            field=models.UUIDField(
-                default=uuid.uuid4, editable=False, primary_key=True, serialize=False
-            ),
+        # BigAutoField -> UUIDField: PostgreSQL cannot cast bigint to uuid. Replace the
+        # column instead of ALTER TYPE ... USING (which Django would emit).
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql=[
+                        "ALTER TABLE applications_accreditationapplication "
+                        "DROP CONSTRAINT IF EXISTS applications_accreditationapplication_pkey;",
+                        "ALTER TABLE applications_accreditationapplication DROP COLUMN id;",
+                        "ALTER TABLE applications_accreditationapplication "
+                        "ADD COLUMN id uuid NOT NULL DEFAULT gen_random_uuid();",
+                        "ALTER TABLE applications_accreditationapplication "
+                        "ADD CONSTRAINT applications_accreditationapplication_pkey "
+                        "PRIMARY KEY (id);",
+                        "ALTER TABLE applications_accreditationapplication "
+                        "ALTER COLUMN id DROP DEFAULT;",
+                    ],
+                    reverse_sql=migrations.RunSQL.noop,
+                ),
+            ],
+            state_operations=[
+                migrations.AlterField(
+                    model_name="accreditationapplication",
+                    name="id",
+                    field=models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+            ],
         ),
         migrations.AlterField(
             model_name="accreditationapplication",

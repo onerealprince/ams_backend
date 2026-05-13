@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
@@ -47,6 +48,28 @@ def me(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
+    """
+    **Flow A — SRS self-service sign-up (Institution Primary Contact)**
+
+    Creates `Institution` + `User` immediately, then sends registration email OTP.
+    Client completes `POST /api/v1/auth/verify-otp/`.
+
+    **Flow B — no portal account yet:** use `POST /api/v1/institutions/onboarding-requests/`
+    (anonymous onboarding; SA/compliance/board then create the user).
+
+    Disable Flow A in production if only Flow B is allowed: `AMS_ALLOW_SELF_SERVICE_REGISTRATION=false`.
+    """
+    if not getattr(settings, 'AMS_ALLOW_SELF_SERVICE_REGISTRATION', True):
+        return Response(
+            {
+                'detail': (
+                    'Self-service sign-up is disabled. Submit an institution onboarding request '
+                    'at POST /api/v1/institutions/onboarding-requests/ or contact your administrator.'
+                ),
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     serializer = RegisterSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
@@ -57,17 +80,18 @@ def register(request):
         return Response({'detail': exc.messages}, status=status.HTTP_400_BAD_REQUEST)
 
     User = get_user_model()
+    reg_no = data['institution_registration_number']
     with transaction.atomic():
-        if User.objects.filter(email=data['email']).exists():
+        if User.objects.filter(email__iexact=data['email'].strip()).exists():
             return Response({'detail': 'Account exists. Log in instead?'}, status=status.HTTP_400_BAD_REQUEST)
 
         institution = Institution.objects.create(
             name=data['institution_name'],
-            registration_number=data['institution_registration_number'],
+            registration_number=reg_no,
         )
 
         user = User.objects.create_user(
-            email=data['email'],
+            email=data['email'].strip().lower(),
             password=data['password'],
             first_name=data['first_name'],
             last_name=data['last_name'],
@@ -80,7 +104,14 @@ def register(request):
     except ValueError as exc:
         return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-    return Response({'detail': 'OTP sent to email.'}, status=status.HTTP_201_CREATED)
+    return Response(
+        {
+            'detail': 'OTP sent to email.',
+            'registration_flow': 'self_service_portal_account',
+            'next_step': 'POST /api/v1/auth/verify-otp/ with email and otp',
+        },
+        status=status.HTTP_201_CREATED,
+    )
 
 
 @api_view(['POST'])

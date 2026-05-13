@@ -10,8 +10,15 @@ from .serializers import InstitutionOnboardingRequestSerializer
 @permission_classes([AllowAny])
 def institution_onboarding_register(request):
     """
-    Public institution + IPC registration (architecture: POST /api/v1/institutions/).
-    Creates InstitutionOnboardingRequest for SA/compliance/board workflow — no User yet.
+    **Flow B — Anonymous institution onboarding (architecture / meeting flow)**
+
+    Creates `InstitutionOnboardingRequest` only. **No** `User` or live `Institution` record yet.
+    After SA → compliance → board → account creation, the IPC gets credentials / onboarding link.
+
+    **Flow A — SRS self-service portal account:** `POST /api/v1/auth/register/` then verify-otp.
+
+    Canonical URL: `POST /api/v1/institutions/onboarding-requests/`
+    (`POST /api/v1/institutions/` is kept as an alias.)
     """
     serializer = InstitutionOnboardingRequestSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -22,6 +29,8 @@ def institution_onboarding_register(request):
             'reference_number': instance.reference_number,
             'status': instance.status,
             'detail': 'Registration submitted. You will be contacted after review.',
+            'registration_flow': 'anonymous_onboarding_no_portal_account',
+            'next_step': 'Wait for staff; no login until an account is created for you.',
         },
         status=status.HTTP_201_CREATED,
     )

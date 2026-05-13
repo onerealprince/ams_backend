@@ -109,3 +109,9 @@ SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.getenv('JWT_ACCESS_MINUTES', '15'))),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=int(os.getenv('JWT_REFRESH_DAYS', '1'))),
 }
+
+# Registration: two supported flows — see apps/accounts/views.register and institutions onboarding.
+# Set to false to disable SRS-style self-service sign-up (e.g. SA-only account creation + anonymous onboarding only).
+AMS_ALLOW_SELF_SERVICE_REGISTRATION = os.getenv(
+    'AMS_ALLOW_SELF_SERVICE_REGISTRATION', 'true'
+).lower() in ('1', 'true', 'yes')

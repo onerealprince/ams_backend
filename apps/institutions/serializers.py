@@ -62,4 +62,11 @@ class InstitutionOnboardingRequestSerializer(serializers.ModelSerializer):
         User = get_user_model()
         if User.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError('An account with this email already exists. Log in instead.')
+        if InstitutionOnboardingRequest.objects.filter(
+            primary_contact_email__iexact=email,
+            status__in=InstitutionOnboardingStatus.open_request_statuses(),
+        ).exists():
+            raise serializers.ValidationError(
+                'An onboarding request with this contact email is already in progress.'
+            )
         return email
